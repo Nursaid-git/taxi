@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 import 'package:taxi/core/theme/app_colors.dart';
 import 'package:taxi/core/theme/app_text_styles.dart';
@@ -898,7 +898,6 @@ class _MapView extends StatefulWidget {
 
 class _MapViewState extends State<_MapView>
     with SingleTickerProviderStateMixin {
-  final _map = MapController();
   late final AnimationController _car;
 
   static const _pickup = LatLng(43.0015, 41.0234);
@@ -937,6 +936,8 @@ class _MapViewState extends State<_MapView>
     super.dispose();
   }
 
+  gmaps.LatLng _g(LatLng p) => gmaps.LatLng(p.latitude, p.longitude);
+
   LatLng _along(List<LatLng> pts, double t) {
     if (t <= 0) return pts.first;
     if (t >= 1) return pts.last;
@@ -968,83 +969,71 @@ class _MapViewState extends State<_MapView>
     }
   }
 
+  Set<gmaps.Marker> _markers(LatLng? carPos) {
+    final markers = <gmaps.Marker>{
+      gmaps.Marker(
+        markerId: const gmaps.MarkerId('pickup'),
+        position: _g(_pickup),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueGreen),
+      ),
+    };
+    if (widget.routeTo != null) {
+      markers.add(gmaps.Marker(
+        markerId: const gmaps.MarkerId('destination'),
+        position: _g(widget.routeTo!),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueRed),
+      ));
+    }
+    if (carPos != null) {
+      markers.add(gmaps.Marker(
+        markerId: const gmaps.MarkerId('car'),
+        position: _g(carPos),
+        flat: true,
+        anchor: const Offset(0.5, 0.5),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueOrange),
+      ));
+    }
+    return markers;
+  }
+
+  Set<gmaps.Polyline> _polylines() {
+    if (widget.showRoute && widget.routeTo != null) {
+      return {
+        gmaps.Polyline(
+          polylineId: const gmaps.PolylineId('route'),
+          points: [_g(_pickup), _g(widget.routeTo!)],
+          color: AppColors.primary,
+          width: 5,
+        ),
+      };
+    }
+    return const {};
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _car,
       builder: (context, _) {
         final carPos = _carPos();
-        return FlutterMap(
-          mapController: _map,
-          options: MapOptions(
-            initialCenter: const LatLng(43.006, 41.030),
-            initialZoom: 13.5,
-            onTap: widget.onTap == null
-                ? null
-                : (tapPos, point) => widget.onTap!(point),
+        return gmaps.GoogleMap(
+          initialCameraPosition: gmaps.CameraPosition(
+            target: _g(const LatLng(43.006, 41.030)),
+            zoom: 13.5,
           ),
-          children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.taxi',
-            ),
-            if (widget.showRoute && widget.routeTo != null)
-              PolylineLayer(
-                polylines: [
-                  Polyline(
-                    points: [_pickup, widget.routeTo!],
-                    strokeWidth: 5,
-                    color: AppColors.primary,
-                  ),
-                ],
-              ),
-            MarkerLayer(
-              markers: [
-                const Marker(
-                  point: _pickup,
-                  width: 22,
-                  height: 22,
-                  child: _Dot(),
-                ),
-                if (widget.routeTo != null)
-                  Marker(
-                    point: widget.routeTo!,
-                    width: 44,
-                    height: 44,
-                    alignment: Alignment.topCenter,
-                    child: const Icon(Icons.location_on_rounded,
-                        color: AppColors.error, size: 40),
-                  ),
-                if (carPos != null)
-                  Marker(
-                    point: carPos,
-                    width: 42,
-                    height: 42,
-                    child: const _CarPuck(),
-                  ),
-              ],
-            ),
-          ],
+          markers: _markers(carPos),
+          polylines: _polylines(),
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          mapToolbarEnabled: false,
+          onTap: widget.onTap == null
+              ? null
+              : (pos) => widget.onTap!(LatLng(pos.latitude, pos.longitude)),
         );
       },
-    );
-  }
-}
-
-class _CarPuck extends StatelessWidget {
-  const _CarPuck();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.accent,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2.5),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
-      ),
-      child: const Icon(Icons.local_taxi_rounded,
-          color: AppColors.primaryDark, size: 22),
     );
   }
 }

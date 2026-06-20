@@ -24,6 +24,7 @@ android {
         applicationId = "com.example.taxi"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Google Maps / geolocator требуют minSdk >= 21; ставим 23 с запасом.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

@@ -1,11 +1,23 @@
+import 'package:taxi/core/enums/user_role.dart';
 
-
-
+/// Авторизация по телефону + одноразовый код (OTP).
+/// Доставка кода (WhatsApp/SMS) настраивается на стороне Supabase (Auth Hook),
+/// со стороны приложения флоу одинаковый.
 abstract class AuthRepository {
-  Future<void> login({ required String phone, required bool rememberMe});
-  Future<void> register({ required String phone});
-  Future<void> logout();
+  /// Отправить код на телефон. Для регистрации передаём [role] и [fullName] —
+  /// они уйдут в метаданные и проставятся триггером handle_new_user.
+  Future<void> sendOtp({
+    required String phone,
+    UserRole? role,
+    String? fullName,
+  });
 
-  Future<void> verify({ required String code});
+  /// Проверить код и войти.
+  Future<void> verifyOtp({required String phone, required String code});
 
+  /// Выйти.
+  Future<void> signOut();
+
+  /// Есть ли активная сессия (для автологина при старте).
+  bool get hasSession;
 }

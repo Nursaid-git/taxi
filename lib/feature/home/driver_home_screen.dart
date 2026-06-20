@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 import 'package:taxi/core/theme/app_colors.dart';
 import 'package:taxi/core/theme/app_text_styles.dart';
@@ -115,128 +115,100 @@ class _DriverMap extends StatefulWidget {
 }
 
 class _DriverMapState extends State<_DriverMap> {
-  final _map = MapController();
+  gmaps.GoogleMapController? _ctrl;
   static const _driver = LatLng(43.0030, 41.0270);
+
+  gmaps.LatLng _g(LatLng p) => gmaps.LatLng(p.latitude, p.longitude);
 
   @override
   void didUpdateWidget(covariant _DriverMap old) {
     super.didUpdateWidget(old);
-    if (widget.order != old.order) _scheduleFit();
+    if (widget.order != old.order) _fit();
   }
 
-  // Подогнать камеру так, чтобы был виден весь маршрут (или вернуться к водителю).
-  void _scheduleFit() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final o = widget.order;
-      if (o == null) {
-        _map.move(_driver, 15);
-        return;
-      }
-      final bounds =
-          LatLngBounds.fromPoints([_driver, o.pickupPoint, o.destPoint]);
-      _map.fitCamera(CameraFit.bounds(
-        bounds: bounds,
-        padding: const EdgeInsets.only(left: 50, right: 50, top: 150, bottom: 300),
-      ));
-    });
+  // Подогнать камеру: показать весь маршрут или вернуться к водителю.
+  void _fit() {
+    final ctrl = _ctrl;
+    if (ctrl == null) return;
+    final o = widget.order;
+    if (o == null) {
+      ctrl.animateCamera(gmaps.CameraUpdate.newLatLngZoom(_g(_driver), 15));
+      return;
+    }
+    final bounds = _boundsOf([_g(_driver), _g(o.pickupPoint), _g(o.destPoint)]);
+    ctrl.animateCamera(gmaps.CameraUpdate.newLatLngBounds(bounds, 60));
+  }
+
+  gmaps.LatLngBounds _boundsOf(List<gmaps.LatLng> pts) {
+    var minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    var minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      minLat = p.latitude < minLat ? p.latitude : minLat;
+      maxLat = p.latitude > maxLat ? p.latitude : maxLat;
+      minLng = p.longitude < minLng ? p.longitude : minLng;
+      maxLng = p.longitude > maxLng ? p.longitude : maxLng;
+    }
+    return gmaps.LatLngBounds(
+      southwest: gmaps.LatLng(minLat, minLng),
+      northeast: gmaps.LatLng(maxLat, maxLng),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final o = widget.order;
-    return FlutterMap(
-      mapController: _map,
-      options: const MapOptions(
-        initialCenter: LatLng(43.0023, 41.0252),
-        initialZoom: 14.5,
+
+    final markers = <gmaps.Marker>{
+      gmaps.Marker(
+        markerId: const gmaps.MarkerId('driver'),
+        position: _g(_driver),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueYellow),
       ),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.example.taxi',
-        ),
-        if (o != null)
-          PolylineLayer(
-            polylines: [
-              // Подача: водитель → клиент (серая)
-              Polyline(
-                points: [_driver, o.pickupPoint],
-                strokeWidth: 4,
-                color: AppColors.textSecondary,
-              ),
-              // Поездка: клиент → назначение (чёрная)
-              Polyline(
-                points: [o.pickupPoint, o.destPoint],
-                strokeWidth: 5,
-                color: AppColors.primary,
-              ),
-            ],
-          ),
-        MarkerLayer(
-          markers: [
-            const Marker(
-              point: _driver,
-              width: 42,
-              height: 42,
-              child: _CarPuck(),
-            ),
-            if (o != null) ...[
-              // Клиент
-              Marker(
-                point: o.pickupPoint,
-                width: 40,
-                height: 40,
-                child: const _ClientPin(),
-              ),
-              // Назначение
-              Marker(
-                point: o.destPoint,
-                width: 40,
-                height: 40,
-                alignment: Alignment.topCenter,
-                child: const Icon(Icons.location_on_rounded,
-                    color: AppColors.error, size: 38),
-              ),
-            ],
-          ],
-        ),
-      ],
-    );
-  }
-}
+    };
+    final polylines = <gmaps.Polyline>{};
 
-class _ClientPin extends StatelessWidget {
-  const _ClientPin();
+    if (o != null) {
+      markers.add(gmaps.Marker(
+        markerId: const gmaps.MarkerId('client'),
+        position: _g(o.pickupPoint),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueGreen),
+      ));
+      markers.add(gmaps.Marker(
+        markerId: const gmaps.MarkerId('destination'),
+        position: _g(o.destPoint),
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueRed),
+      ));
+      polylines.add(gmaps.Polyline(
+        polylineId: const gmaps.PolylineId('pickup'),
+        points: [_g(_driver), _g(o.pickupPoint)],
+        color: AppColors.textSecondary,
+        width: 4,
+      ));
+      polylines.add(gmaps.Polyline(
+        polylineId: const gmaps.PolylineId('trip'),
+        points: [_g(o.pickupPoint), _g(o.destPoint)],
+        color: AppColors.primary,
+        width: 5,
+      ));
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.success,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+    return gmaps.GoogleMap(
+      initialCameraPosition: gmaps.CameraPosition(
+        target: _g(const LatLng(43.0023, 41.0252)),
+        zoom: 14.5,
       ),
-      child: const Icon(Icons.person_rounded, color: Colors.white, size: 22),
-    );
-  }
-}
-
-class _CarPuck extends StatelessWidget {
-  const _CarPuck();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.accent,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2.5),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
-      ),
-      child: const Icon(Icons.local_taxi_rounded,
-          color: AppColors.primaryDark, size: 22),
+      markers: markers,
+      polylines: polylines,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      mapToolbarEnabled: false,
+      onMapCreated: (c) {
+        _ctrl = c;
+        if (widget.order != null) _fit();
+      },
     );
   }
 }
