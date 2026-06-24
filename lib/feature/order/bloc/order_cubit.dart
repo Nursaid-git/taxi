@@ -1,113 +1,323 @@
-import 'package:equatable/equatable.dart';
+// lib/feature/order/bloc/order_cubit.dart
+// ─────────────────────────────────────────────────────────────────────────────
+// Центральный кубит заказа клиента.
+//
+// Отвечает за:
+//   1. UI-переходы между стадиями экрана (idle → search → tariffs → ...)
+//   2. Вызов Supabase RPC (request_ride, cancel_ride, rate_ride)
+//   3. Realtime-подписку на таблицу rides → автообновление стадии
+//   4. Загрузку карточки водителя через driver_card()
+//   5. Восстановление активного заказа при открытии экрана
+// ─────────────────────────────────────────────────────────────────────────────
+
+import 'dart:async';
+
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:taxi/feature/order/order_models.dart';
+import 'package:taxi/core/enums/ride_enums.dart';
+import 'package:taxi/feature/order/bloc/order_state.dart';
+import 'package:taxi/feature/order/model/ride_model.dart';
+import 'package:taxi/feature/order/model/order_models.dart';
+import 'package:taxi/feature/order/repository/order_repository.dart';
 
-part 'order_state.dart';
+export 'order_state.dart'; // экран импортирует OrderStage и OrderState отсюда
 
-/// Управляет всем процессом заказа в пределах главного экрана —
-/// без перехода на другие экраны.
+// ─────────────────── Константы ───────────────────────────────────────────────
+
+/// Адрес подачи по умолчанию (пока нет геолокации).
+/// TODO: заменить на реальное местоположение через geolocator.
+const _defaultPickupAddress = 'Моё местоположение';
+const _defaultPickupLat = 43.0042;
+const _defaultPickupLng = 41.0148;
+
+/// Координаты точки по умолчанию, если в Place нет lat/lng.
+/// TODO: после добавления lat/lng в Place — удалить эту заглушку.
+const _fallbackLat = 43.0145;
+const _fallbackLng = 41.0440;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 class OrderCubit extends Cubit<OrderState> {
-  OrderCubit() : super(const OrderState());
-
-  static const _pickup = LatLng(43.0015, 41.0234); // моё местоположение
-
-  /// Тапнули по полю адреса — новый поиск (сбрасываем точки).
-  void openSearch() => emit(state.copyWith(
-        stage: OrderStage.search,
-        clearStops: true,
-        addingStop: false,
-        query: '',
-      ));
-
-  /// Добавить ещё одну точку — поиск в режиме добавления (точки сохраняются).
-  void addStopSearch() => emit(state.copyWith(
-        stage: OrderStage.search,
-        addingStop: true,
-        query: '',
-      ));
-
-  /// Ввод текста в поле адреса.
-  void setQuery(String q) =>
-      emit(state.copyWith(stage: OrderStage.search, query: q));
-
-  /// Выбрали адрес — добавляем точку (или начинаем новый список).
-  void pickPlace(Place p) {
-    final stops = state.addingStop ? [...state.stops, p] : [p];
-    emit(state.copyWith(
-      stage: OrderStage.tariffs,
-      stops: stops,
-      addingStop: false,
-      query: '',
-      clearMapPoint: true,
-    ));
+  OrderCubit({OrderRepository? repository})
+      : _repo = repository ?? OrderRepository(),
+        super(const OrderState()) {
+    _init();
   }
 
-  /// Убрать точку. Если не осталось ни одной — на главную.
-  void removeStop(int index) {
-    final stops = [...state.stops]..removeAt(index);
-    if (stops.isEmpty) {
-      emit(const OrderState());
-    } else {
-      emit(state.copyWith(stage: OrderStage.tariffs, stops: stops));
+  final OrderRepository _repo;
+  StreamSubscription<RideModel>? _rideSub;
+
+  // ─────────────────── Инициализация ───────────────────────────────────────
+
+  /// Вызывается при создании кубита.
+  /// Проверяет, есть ли незавершённый заказ → восстанавливает состояние.
+  Future<void> _init() async {
+    try {
+      final activeRide = await _repo.getActiveRide();
+      if (activeRide != null) {
+        _applyRide(activeRide);
+        _subscribeToRide(activeRide.id);
+      }
+    } catch (_) {
+      // Нет сети или нет сессии — стартуем с idle, не падаем.
     }
   }
 
-  /// Режим выбора точки на карте (шторка прячется).
+  // ─────────────────── UI навигация (без Supabase) ─────────────────────────
+
+  void openSearch() => emit(state.copyWith(stage: OrderStage.search));
+
+  void addStopSearch() => emit(state.copyWith(stage: OrderStage.search));
+
+  void setQuery(String q) => emit(state.copyWith(searchQuery: q));
+
   void enterMapPick() =>
       emit(state.copyWith(stage: OrderStage.mapPick, clearMapPoint: true));
 
-  void setMapPoint(LatLng p) => emit(state.copyWith(mapPoint: p));
+  void setMapPoint(LatLng ll) => emit(state.copyWith(mapPoint: ll));
 
-  /// Подтвердили точку на карте — считаем расстояние/цену, добавляем точку.
   void confirmMapPoint() {
-    final p = state.mapPoint;
-    if (p == null) return;
-    final km = const Distance()
-        .as(LengthUnit.Kilometer, _pickup, p)
-        .round()
-        .clamp(1, 200);
-    final min = (km * 1.6).round().clamp(3, 200);
-    final base = ((km * 40 + 150) / 10).round() * 10;
-    final place = Place('Точка на карте', 'Выбрано на карте', km, min, base);
-    final stops = state.addingStop ? [...state.stops, place] : [place];
-    emit(state.copyWith(
-      stage: OrderStage.tariffs,
-      stops: stops,
-      addingStop: false,
-      query: '',
-    ));
+    if (state.mapPoint == null) return;
+    // Создаём Place из точки на карте с fallback-данными.
+    final mp = state.mapPoint!;
+    final place = Place(
+      'Точка на карте',
+      '${mp.latitude.toStringAsFixed(4)}, ${mp.longitude.toStringAsFixed(4)}',
+      10,   // durationMin — примерное (TODO: реальный маршрут)
+      5,    // distanceKm
+      200,  // price — примерное
+    );
+    _addStop(place);
+  }
+
+  void pickPlace(Place place) {
+    _focus();
+    _addStop(place);
+    // Сохраняем в recent_places (fire-and-forget).
+    _repo.upsertRecentPlace(
+      address: place.subtitle,
+      lat: _fallbackLat, // TODO: Place.lat когда добавите поле
+      lng: _fallbackLng, // TODO: Place.lng когда добавите поле
+    ).catchError((_) {});
+  }
+
+  void removeStop(int index) {
+    final stops = List<Place>.from(state.stops)..removeAt(index);
+    if (stops.isEmpty) {
+      emit(state.copyWith(stops: stops, stage: OrderStage.search));
+    } else {
+      emit(state.copyWith(stops: stops));
+    }
   }
 
   void selectTariff(int i) => emit(state.copyWith(selectedTariff: i));
 
-  /// Заказать — демо-логика: ищем → водитель едет → ждёт вас.
-  /// Дальше поездку запускает [startRiding] (после ожидания).
+  void _addStop(Place place) {
+    final stops = [...state.stops, place];
+    emit(state.copyWith(
+      stops: stops,
+      stage: OrderStage.tariffs,
+      clearMapPoint: true,
+    ));
+  }
+
+  void _focus() {}
+
+  // ─────────────────── Создание заказа ─────────────────────────────────────
+
+  /// Вызывается кнопкой «Заказать» на экране тарифов.
+  /// Создаёт заказ через RPC request_ride → переходит в stage searching.
   Future<void> confirm() async {
-    emit(state.copyWith(stage: OrderStage.searching));
-    if (await _wait(3500, OrderStage.searching)) return;
-    emit(state.copyWith(stage: OrderStage.driverFound));
-    if (await _wait(4000, OrderStage.driverFound)) return;
-    emit(state.copyWith(stage: OrderStage.driverWaiting));
+    if (!state.hasStops) return;
+    if (state.isLoading) return;
+
+    emit(state.copyWith(isLoading: true, clearError: true));
+
+    try {
+      final tariffs = tariffsFor(state.totalBase);
+      final selectedTariff = tariffs[state.selectedTariff];
+      final rideClass = RideClass.fromTariffIndex(state.selectedTariff);
+
+      // Формируем массив stops для RPC.
+      final stops = state.stops.map((p) => {
+        'address': p.subtitle,
+        'lat': _fallbackLat,  // TODO: заменить на p.lat когда добавите поле
+        'lng': _fallbackLng,  // TODO: заменить на p.lng когда добавите поле
+      }).toList();
+
+      final ride = await _repo.requestRide(
+        rideClass: rideClass,
+        paymentMethod: PaymentMethod.cash,
+        pickupAddress: _defaultPickupAddress,
+        pickupLat: _defaultPickupLat,
+        pickupLng: _defaultPickupLng,
+        distanceKm: state.totalKm,
+        durationMin: state.totalMin,
+        priceEstimated: selectedTariff.price,
+        stops: stops,
+      );
+
+      emit(state.copyWith(
+        stage: OrderStage.searching,
+        rideId: ride.id,
+        isLoading: false,
+      ));
+
+      // Запускаем Realtime-подписку.
+      _subscribeToRide(ride.id);
+    } catch (e) {
+      emit(state.copyWith(
+        isLoading: false,
+        error: _humanError(e),
+      ));
+    }
   }
 
-  /// Начать поездку (после ожидания) → едем → приехали (оценка).
-  Future<void> startRiding() async {
+  // ─────────────────── Отмена заказа ───────────────────────────────────────
+
+  /// Сброс: если есть активная поездка — отменяем в Supabase.
+  /// Иначе просто возвращаемся на idle.
+  Future<void> reset() async {
+    final rideId = state.rideId;
+
+    // Отписываемся от Realtime немедленно.
+    await _rideSub?.cancel();
+    _rideSub = null;
+    await _repo.unsubscribeRide();
+
+    if (rideId != null &&
+        (state.stage == OrderStage.searching ||
+            state.stage == OrderStage.driverFound ||
+            state.stage == OrderStage.driverWaiting)) {
+      // Отменяем в Supabase (fire-and-forget, UI уже вернулся на idle).
+      _repo.cancelRide(rideId).catchError((_) {});
+    }
+
+    emit(state.initial);
+  }
+
+  // ─────────────────── Демо-метод (только UI) ──────────────────────────────
+
+  /// В реальном приложении поездку начинает ВОДИТЕЛЬ (start_ride).
+  /// Этот метод существует только для тестирования демо-таймера в WaitingPanel.
+  void startRiding() {
     emit(state.copyWith(stage: OrderStage.riding));
-    if (await _wait(4500, OrderStage.riding)) return;
-    emit(state.copyWith(stage: OrderStage.rating));
   }
 
-  /// Пауза. Возвращает true, если стадия сменилась (пользователь отменил) —
-  /// тогда цепочку нужно прервать.
-  Future<bool> _wait(int ms, OrderStage expected) async {
-    await Future.delayed(Duration(milliseconds: ms));
-    return isClosed || state.stage != expected;
+  // ─────────────────── Оценка поездки ──────────────────────────────────────
+
+  /// Отправляет оценку через rate_ride → возвращает на idle.
+  Future<void> submitRating({
+    int stars = 5,
+    String? comment,
+    List<String> tags = const [],
+  }) async {
+    final rideId = state.rideId;
+    if (rideId == null) {
+      emit(state.initial);
+      return;
+    }
+
+    try {
+      await _repo.rateRide(
+        rideId: rideId,
+        stars: stars,
+        comment: comment,
+        tags: tags,
+      );
+    } catch (_) {
+      // Ошибка оценки не критична — всё равно сбрасываем экран.
+    } finally {
+      await _rideSub?.cancel();
+      _rideSub = null;
+      await _repo.unsubscribeRide();
+      emit(state.initial);
+    }
   }
 
-  /// Оценка поездки завершена — возвращаемся на главную.
-  void submitRating() => emit(const OrderState());
+  // ─────────────────── Realtime ─────────────────────────────────────────────
 
-  /// Отмена / возврат к началу.
-  void reset() => emit(const OrderState());
+  void _subscribeToRide(String rideId) {
+    _rideSub?.cancel();
+    _rideSub = _repo.watchRide(rideId).listen(
+          (ride) => _applyRide(ride),
+      onError: (_) {/* сетевые ошибки — молча */},
+    );
+  }
+
+  /// Маппит ride_status → OrderStage и обновляет кубит.
+  void _applyRide(RideModel ride) {
+    final stage = _stageFromStatus(ride.status);
+    if (stage == null) return; // completed/cancelled/expired обработаны ниже
+
+    // Терминальные статусы
+    if (ride.status == RideStatus.completed) {
+      emit(state.copyWith(
+        stage: OrderStage.rating,
+        rideId: ride.id,
+        priceFinal: ride.priceFinal ?? ride.priceEstimated,
+        isLoading: false,
+      ));
+      return;
+    }
+
+    if (ride.status == RideStatus.cancelled ||
+        ride.status == RideStatus.expired) {
+      _rideSub?.cancel();
+      _rideSub = null;
+      emit(state.initial);
+      return;
+    }
+
+    // Загружаем карточку водителя при первом появлении driver_id.
+    if (ride.driverId != null && state.driverCard == null) {
+      _loadDriverCard(ride.driverId!);
+    }
+
+    emit(state.copyWith(
+      stage: stage,
+      rideId: ride.id,
+      freeWaitUntil: ride.freeWaitUntil,
+      isLoading: false,
+      clearError: true,
+    ));
+  }
+
+  /// Конвертирует ride_status в OrderStage. null = не нужно менять стадию.
+  OrderStage? _stageFromStatus(RideStatus status) => switch (status) {
+    RideStatus.searching => OrderStage.searching,
+    RideStatus.accepted => OrderStage.driverFound,
+    RideStatus.arrived => OrderStage.driverWaiting,
+    RideStatus.inProgress => OrderStage.riding,
+    _ => null,
+  };
+
+  // ─────────────────── Карточка водителя ───────────────────────────────────
+
+  Future<void> _loadDriverCard(String driverId) async {
+    try {
+      final card = await _repo.getDriverCard(driverId);
+      if (card != null) {
+        emit(state.copyWith(driverCard: card));
+      }
+    } catch (_) {/* некритично */}
+  }
+
+  // ─────────────────── Вспомогательные методы ──────────────────────────────
+
+  String _humanError(Object e) {
+    final msg = e.toString();
+    if (msg.contains('auth required')) return 'Требуется авторизация';
+    if (msg.contains('at least one destination')) return 'Укажите адрес назначения';
+    return 'Что-то пошло не так. Попробуйте ещё раз.';
+  }
+
+  // ─────────────────── Закрытие ─────────────────────────────────────────────
+
+  @override
+  Future<void> close() async {
+    await _rideSub?.cancel();
+    await _repo.unsubscribeRide();
+    return super.close();
+  }
 }

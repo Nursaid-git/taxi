@@ -7,6 +7,10 @@ import 'package:taxi/core/theme/app_text_styles.dart';
 import 'package:taxi/core/widgets/app_button_widget.dart';
 import 'package:taxi/feature/driver/bloc/driver_cubit.dart';
 
+import '../driver/bloc/driver_state.dart';
+import '../driver/repository/driver_order.dart';
+import '../driver/repository/driver_repository.dart';
+
 /// Главный экран ВОДИТЕЛЯ: карта, сводка заработка и панель статуса
 /// (офлайн → на линии → входящий заказ → за клиентом → поездка).
 class DriverHomeScreen extends StatelessWidget {
@@ -15,7 +19,8 @@ class DriverHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => DriverCubit(),
+      // ← [ИЗМЕНЕНИЕ 1] Передаём репозиторий в Cubit — он сам инициализируется
+      create: (_) => DriverCubit(repository: DriverRepository()),
       child: const _DriverHomeView(),
     );
   }
@@ -71,34 +76,54 @@ class _DriverHomeView extends StatelessWidget {
 
   Widget _panel(BuildContext context, DriverState state) {
     final cubit = context.read<DriverCubit>();
+
+    // ← [ИЗМЕНЕНИЕ 2] Показываем SnackBar при ошибке (один раз, потом сбрасываем)
+    if (state.errorMessage != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(state.errorMessage!),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      });
+    }
+
+    // ← [ИЗМЕНЕНИЕ 3] Блокируем кнопки пока идёт запрос к Supabase
+    final loading = state.isLoading;
+
     switch (state.stage) {
       case DriverStage.offline:
-        return _OfflinePanel(onGoOnline: cubit.goOnline);
+        return _OfflinePanel(
+          onGoOnline: loading ? () {} : cubit.goOnline,
+        );
       case DriverStage.online:
-        return _OnlinePanel(onGoOffline: cubit.goOffline);
+        return _OnlinePanel(
+          onGoOffline: loading ? () {} : cubit.goOffline,
+        );
       case DriverStage.incoming:
         return _IncomingCard(
           key: ValueKey(state.order),
           order: state.order!,
-          onAccept: cubit.accept,
-          onDecline: cubit.decline,
+          onAccept: loading ? () {} : cubit.accept,
+          onDecline: loading ? () {} : cubit.decline,
         );
       case DriverStage.toPickup:
         return _ToPickupPanel(
           order: state.order!,
-          onArrived: cubit.arrived,
-          onCancel: cubit.decline,
+          onArrived: loading ? () {} : cubit.arrived,
+          onCancel: loading ? () {} : cubit.decline,
         );
       case DriverStage.waiting:
         return _WaitingPanel(
           order: state.order!,
-          onStart: cubit.startTrip,
-          onCancel: cubit.decline,
+          onStart: loading ? () {} : cubit.startTrip,
+          onCancel: loading ? () {} : cubit.decline,
         );
       case DriverStage.inProgress:
         return _InProgressPanel(
           order: state.order!,
-          onComplete: cubit.complete,
+          onComplete: loading ? () {} : cubit.complete,
         );
     }
   }

@@ -1,67 +1,62 @@
-part of 'driver_cubit.dart';
+// lib/feature/driver/bloc/driver_state.dart
 
-/// Стадии работы водителя на главном экране.
+import 'package:equatable/equatable.dart';
+
+import '../repository/driver_order.dart';
+
 enum DriverStage {
-  offline, // не на линии
-  online, // на линии, ждём заказ
-  incoming, // пришёл заказ (таймер на принятие)
-  toPickup, // принял, едет за клиентом
-  waiting, // на месте, ждём клиента (до старта поездки)
-  inProgress, // поездка идёт
-}
-
-/// Входящий заказ для водителя.
-class DriverOrder {
-  final String pickup;
-  final String destination;
-  final int km;
-  final int min;
-  final int price;
-  final String clientName;
-  final double clientRating;
-  final LatLng pickupPoint;
-  final LatLng destPoint;
-  const DriverOrder(
-    this.pickup,
-    this.destination,
-    this.km,
-    this.min,
-    this.price,
-    this.clientName,
-    this.clientRating,
-    this.pickupPoint,
-    this.destPoint,
-  );
+  offline,
+  online,
+  incoming,
+  toPickup,
+  waiting,
+  inProgress,
 }
 
 class DriverState extends Equatable {
   final DriverStage stage;
   final DriverOrder? order;
-  final int todayRides;
   final int todayEarnings;
+  final int todayRides;
+  final double ratingAvg;
+  final bool isLoading;
+  final String? errorMessage;
 
   const DriverState({
     this.stage = DriverStage.offline,
     this.order,
-    this.todayRides = 0,
     this.todayEarnings = 0,
+    this.todayRides = 0,
+    this.ratingAvg = 5.0,
+    this.isLoading = false,
+    this.errorMessage,
   });
 
   DriverState copyWith({
     DriverStage? stage,
     DriverOrder? order,
     bool clearOrder = false,
-    int? todayRides,
     int? todayEarnings,
+    int? todayRides,
+    double? ratingAvg,
+    bool? isLoading,
+    String? errorMessage,
+    bool clearError = false,
   }) {
     return DriverState(
       stage: stage ?? this.stage,
       order: clearOrder ? null : (order ?? this.order),
-      todayRides: todayRides ?? this.todayRides,
       todayEarnings: todayEarnings ?? this.todayEarnings,
+      todayRides: todayRides ?? this.todayRides,
+      ratingAvg: ratingAvg ?? this.ratingAvg,
+      isLoading: isLoading ?? this.isLoading,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
     );
   }
 
   @override
-  List<Object?> get props => [stage, order, todayRides, todayEarnings];
+  List<Object?> get props => [
+        stage, order, todayEarnings, todayRides,
+        ratingAvg, isLoading, errorMessage,
+      ];
 }

@@ -1,4 +1,3 @@
-import 'package:device_preview/device_preview.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -19,13 +18,7 @@ Future<void> main() async {
     anonKey: AppConfig.supabaseAnonKey,
   );
 
-  runApp(
-    DevicePreview(
-      // Превью только в debug — в релизе обычное приложение.
-      enabled: !kReleaseMode,
-      builder: (_) => const TaxiApp(),
-    ),
-  );
+  runApp(const TaxiApp());
 }
 
 class TaxiApp extends StatelessWidget {
@@ -41,8 +34,6 @@ class TaxiApp extends StatelessWidget {
         child: MaterialApp(
           title: 'Taxi Абхазия',
           debugShowCheckedModeBanner: false,
-          locale: DevicePreview.locale(context),
-          builder: DevicePreview.appBuilder,
           theme: AppTheme.light,
           home: const SplashScreen(),
         ),

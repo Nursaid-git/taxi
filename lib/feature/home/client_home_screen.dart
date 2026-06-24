@@ -10,13 +10,23 @@ import 'package:taxi/core/utils/launchers.dart';
 import 'package:taxi/core/widgets/app_button_widget.dart';
 import 'package:taxi/feature/chat/chat_screen.dart';
 import 'package:taxi/feature/order/bloc/order_cubit.dart';
-import 'package:taxi/feature/order/order_models.dart';
+import 'package:taxi/feature/order/model/order_models.dart';
 
 // Данные найденного водителя (демо).
-const _driverName = 'Астамур';
-const _driverPhone = '+7 940 123 45 67';
-const _driverCar = 'Toyota Camry, белый';
-const _driverPlate = 'A 123 AB';
+String _driverName(OrderState s) =>
+    s.driverCard?.fullName ?? 'Водитель';
+
+String _driverCar(OrderState s) =>
+    s.driverCard?.carLabel ?? '—';
+
+String _driverPlate(OrderState s) =>
+    s.driverCard?.plateLabel ?? '—';
+
+String _driverRating(OrderState s) =>
+    s.driverCard != null
+        ? s.driverCard!.ratingAvg.toStringAsFixed(1)
+        : '5.0';
+String get _driverPhone => '+7 940 000 00 00';
 
 /// Главный экран КЛИЕНТА. Весь заказ происходит ЗДЕСЬ, в нижней шторке —
 /// без перехода на другие экраны (таб-бар остаётся видимым). Логика — [OrderCubit].
@@ -224,6 +234,7 @@ class _ClientHomeViewState extends State<_ClientHomeView> {
         return _pad(_driverPanel(state));
       case OrderStage.driverWaiting:
         return _pad(_WaitingPanel(
+          state: state,
           onTripStart: () => _cubit.startRiding(),
           onCancel: _back,
         ));
@@ -467,15 +478,14 @@ class _ClientHomeViewState extends State<_ClientHomeView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_driverName, style: AppTextStyles.title),
+                  Text(_driverName(state), style: AppTextStyles.title),
                   const SizedBox(height: 2),
                   Row(
                     children: [
                       const Icon(Icons.star_rounded,
                           size: 15, color: AppColors.warning),
                       const SizedBox(width: 4),
-                      Text('4.9 · $_driverCar',
-                          style: AppTextStyles.bodySecondary),
+                      Text('${_driverRating(state)} · ${_driverCar(state)}', style: AppTextStyles.bodySecondary),
                     ],
                   ),
                 ],
@@ -488,7 +498,7 @@ class _ClientHomeViewState extends State<_ClientHomeView> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: AppColors.border),
               ),
-              child: Text(_driverPlate,
+              child: Text(_driverPlate(state),
                   style: AppTextStyles.title.copyWith(fontSize: 16)),
             ),
           ],
@@ -510,10 +520,10 @@ class _ClientHomeViewState extends State<_ClientHomeView> {
                 label: 'Чат',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => const ChatScreen(
-                      name: _driverName,
+                    builder: (_) => ChatScreen(
+                      name: _driverName(state),
                       phone: _driverPhone,
-                      subtitle: '$_driverCar · $_driverPlate',
+                      subtitle: '${_driverCar(state)} · ${_driverPlate(state)}',
                     ),
                   ),
                 ),
@@ -714,9 +724,14 @@ class _CommentTag extends StatelessWidget {
 /// ожидание, после чего автоматически начинается поездка.
 /// Длительности здесь демо-сжатые (реально бесплатно 4 минуты).
 class _WaitingPanel extends StatefulWidget {
+  final OrderState state;
   final VoidCallback onTripStart;
   final VoidCallback onCancel;
-  const _WaitingPanel({required this.onTripStart, required this.onCancel});
+  const _WaitingPanel({
+    required this.state,
+    required this.onTripStart,
+    required this.onCancel,
+  });
 
   @override
   State<_WaitingPanel> createState() => _WaitingPanelState();
@@ -810,15 +825,14 @@ class _WaitingPanelState extends State<_WaitingPanel> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_driverName, style: AppTextStyles.title),
+                  Text(_driverName(widget.state), style: AppTextStyles.title),
                   const SizedBox(height: 2),
                   Row(
                     children: [
                       const Icon(Icons.star_rounded,
                           size: 15, color: AppColors.warning),
                       const SizedBox(width: 4),
-                      Text('4.9 · $_driverCar',
-                          style: AppTextStyles.bodySecondary),
+                      Text('${_driverRating(widget.state)} · ${_driverCar(widget.state)}', style: AppTextStyles.bodySecondary),
                     ],
                   ),
                 ],
@@ -831,7 +845,7 @@ class _WaitingPanelState extends State<_WaitingPanel> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: AppColors.border),
               ),
-              child: Text(_driverPlate,
+              child: Text(_driverPlate(widget.state),
                   style: AppTextStyles.title.copyWith(fontSize: 16)),
             ),
           ],
@@ -853,10 +867,10 @@ class _WaitingPanelState extends State<_WaitingPanel> {
                 label: 'Чат',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => const ChatScreen(
-                      name: _driverName,
+                    builder: (_) => ChatScreen(
+                      name: _driverName(widget.state),
                       phone: _driverPhone,
-                      subtitle: '$_driverCar · $_driverPlate',
+                      subtitle: '${_driverCar(widget.state)} · ${_driverPlate(widget.state)}',
                     ),
                   ),
                 ),
